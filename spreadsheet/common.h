@@ -42,13 +42,17 @@ public:
         Div0,  // в результате вычисления возникло деление на ноль
     };
 
-    FormulaError(Category category);
+    FormulaError(Category category):category_(category) {}
 
-    Category GetCategory() const;
+    Category GetCategory() const {return category_;}
 
-    bool operator==(FormulaError rhs) const;
+    bool operator==(FormulaError rhs) const {return this->category_ == rhs.category_;}
 
-    std::string_view ToString() const;
+    std::string_view ToString() const {
+        if (category_ == Category::Ref) {return "ссылка на ячейку с некорректной позицией";}
+        else if (category_ == Category::Value) {return "ячейка не может быть трактована как число";}
+        else  {return "в результате вычисления возникло деление на ноль";}
+    }
 
 private:
     Category category_;

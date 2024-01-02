@@ -9,6 +9,8 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include "sheet.h"
+#include <string>
 
 namespace ASTImpl {
 
@@ -72,7 +74,7 @@ public:
     virtual ~Expr() = default;
     virtual void Print(std::ostream& out) const = 0;
     virtual void DoPrintFormula(std::ostream& out, ExprPrecedence precedence) const = 0;
-    virtual double Evaluate(/*добавьте сюда нужные аргументы*/ args) const = 0;
+    virtual double Evaluate(const SheetInterface* sheet) const = 0;
 
     // higher is tighter
     virtual ExprPrecedence GetPrecedence() const = 0;
@@ -142,8 +144,24 @@ public:
         }
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/) const override {
-			// Скопируйте ваше решение из предыдущих уроков.
+    template <typename Type>
+    double CheckCorrect (const Type& func) const {
+       // double temp = 0;
+        if (std::isfinite(func))
+        { return func; }
+        else {
+            throw FormulaError(FormulaError::Category::Div0);
+        }
+    }
+    
+    
+    double Evaluate(const SheetInterface* sheet) const override {
+        double temp = 0;
+        if (type_ == '/') {return CheckCorrect (temp = lhs_.get()->Evaluate(sheet) / rhs_.get()->Evaluate(sheet));}
+        else if (type_ == '*') {return CheckCorrect (lhs_.get()->Evaluate(sheet) * rhs_.get()->Evaluate(sheet));}
+        else if (type_ == '-') {return CheckCorrect (lhs_.get()->Evaluate(sheet) - rhs_.get()->Evaluate(sheet));}
+        else if (type_ == '+') {return CheckCorrect (temp = lhs_.get()->Evaluate(sheet) + rhs_.get()->Evaluate(sheet));}
+        else { throw FormulaError(FormulaError::Category::Div0); }
     }
 
 private:
@@ -180,8 +198,8 @@ public:
         return EP_UNARY;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
-        // Скопируйте ваше решение из предыдущих уроков.
+    double Evaluate(const SheetInterface* sheet) const override {
+        return type_ == Type::UnaryPlus ? operand_.get()->Evaluate(sheet) : ((operand_.get()->Evaluate(sheet))*-1);
     }
 
 private:
@@ -197,7 +215,7 @@ public:
 
     void Print(std::ostream& out) const override {
         if (!cell_->IsValid()) {
-            out << FormulaError::Category::Ref;
+            out << FormulaError(FormulaError::Category::Ref);
         } else {
             out << cell_->ToString();
         }
@@ -211,9 +229,81 @@ public:
         return EP_ATOM;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
-        // реализуйте метод.
+    double Evaluate(const SheetInterface* sheet) const override {
+        
+        
+        const Sheet* sheet_ptr = dynamic_cast <const Sheet*> (sheet);
+        const CellInterface* ptr_cell = sheet_ptr->GetCell(*cell_);
+        if (ptr_cell == nullptr) {return 0;}
+        //const Sheet* sheet_ptr = dynamic_cast <const Sheet*> (sheet);
+        const Cell* ptr_cell_cell = dynamic_cast <const Cell*> (ptr_cell);
+        if (ptr_cell_cell->Empty()) {return 0;}
+
+////// взять значение из кэша если есть
+        bool cache_empty = false;
+        if (sheet_ptr->GetValueFromCache(*cell_).has_value()) {  // взять из кэша
+            auto cache_val = sheet_ptr->GetValueFromCache(*cell_).value();
+            if (std::holds_alternative <double> (cache_val)) {
+                return std::get<double>(cache_val);
+            }
+            else if (std::holds_alternative <FormulaError> (cache_val)) {
+                throw std::get<FormulaError>(cache_val);
+            }
+        } 
+        else {
+            cache_empty = true;
+        }
+////// взять значение из кэша если есть
+
+        auto val = ptr_cell->GetValue();
+        if (std::holds_alternative <double> (val)) {
+            return std::get<double>(val);
+        }
+        else if (std::holds_alternative <std::string> (val)) {
+            auto text = std::get<std::string>(val);
+            double num = 0;
+            if (text == "") {return num;}
+            size_t pos_n = 0; // pos адрес переменной целочисленного типа для сохранения 
+                                    // в ней индекса первого непреобразованного символа
+            try {
+                
+                num = std::stod(text, &pos_n);
+               
+            } 
+            catch (std::invalid_argument const& ex) {
+                if (cache_empty) {
+                    sheet_ptr->SetValuetoCache(*cell_, FormulaError (FormulaError::Category::Value));
+                }
+                throw FormulaError (FormulaError::Category::Value);
+            }
+            catch (std::out_of_range const& ex) {
+                if (cache_empty) {
+                    sheet_ptr->SetValuetoCache(*cell_, FormulaError (FormulaError::Category::Value));
+                }
+                throw FormulaError (FormulaError::Category::Value);
+            }
+            if (pos_n != text.size()) {
+                if (cache_empty) {
+                    sheet_ptr->SetValuetoCache(*cell_, FormulaError (FormulaError::Category::Value));
+                }
+                throw FormulaError (FormulaError::Category::Value);
+            }
+            
+            // записать в кэш
+            if (cache_empty) {
+                sheet_ptr->SetValuetoCache(*cell_, num);
+            }
+
+            /// конец записи в кэш
+            return num;
+            
+            
+        }
+        else { return {};}
     }
+    // double FormulaAST::Execute(SheetInterface* sheet) const {
+    // return root_expr_->Evaluate();
+    // }
 
 private:
     const Position* cell_;
@@ -237,7 +327,7 @@ public:
         return EP_ATOM;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
+    double Evaluate(const SheetInterface* sheet) const override {
         return value_;
     }
 
@@ -374,7 +464,12 @@ FormulaAST ParseFormulaAST(std::istream& in) {
 
 FormulaAST ParseFormulaAST(const std::string& in_str) {
     std::istringstream in(in_str);
+    try {
     return ParseFormulaAST(in);
+    }
+    catch (...){
+        throw FormulaException ("Formula Error"); 
+    }
 }
 
 void FormulaAST::PrintCells(std::ostream& out) const {
@@ -391,8 +486,8 @@ void FormulaAST::PrintFormula(std::ostream& out) const {
     root_expr_->PrintFormula(out, ASTImpl::EP_ATOM);
 }
 
-double FormulaAST::Execute(/*добавьте нужные аргументы*/ args) const {
-    return root_expr_->Evaluate(/*добавьте нужные аргументы*/ args);
+double FormulaAST::Execute(const SheetInterface* sheet) const {
+    return root_expr_->Evaluate(sheet);
 }
 
 FormulaAST::FormulaAST(std::unique_ptr<ASTImpl::Expr> root_expr, std::forward_list<Position> cells)
